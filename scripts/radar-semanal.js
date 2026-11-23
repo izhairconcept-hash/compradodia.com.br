@@ -76,6 +76,14 @@ function linkBuscaGarantidaML(nomeProduto) {
   return `https://lista.mercadolivre.com.br/${slugBusca}`;
 }
 
+function extrairArrayJSON(texto) {
+  const limpo = (texto || "").replace(/```json|```/gi, "").trim();
+  const inicio = limpo.indexOf("[");
+  const fim = limpo.lastIndexOf("]");
+  if (inicio === -1 || fim === -1) return [];
+  return JSON.parse(limpo.slice(inicio, fim + 1));
+}
+
 async function enviarTelegram(chatId, texto) {
   if (!TELEGRAM_BOT_TOKEN || !chatId) return;
   await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -101,11 +109,7 @@ async function buscarProdutosML(termo, taxaComissao) {
       }
     });
 
-    if (!res.ok) {
-      console.warn(`⚠️ API ML retornou status ${res.status} para "${termo}"`);
-      return [];
-    }
-
+    if (!res.ok) return [];
     const json = await res.json();
 
     return (json.results || [])
@@ -114,12 +118,7 @@ async function buscarProdutosML(termo, taxaComissao) {
         const comissaoReais = preco * taxaComissao;
         const temLinkValido = typeof item.permalink === "string" && item.permalink.startsWith("http");
 
-        return (
-          temLinkValido &&
-          preco >= 65 &&
-          preco <= 550 &&
-          comissaoReais >= 7.5
-        );
+        return temLinkValido && preco >= 65 && preco <= 550 && comissaoReais >= 7.5;
       })
       .map(item => {
         const comissaoReais = Number((item.price * taxaComissao).toFixed(2));
@@ -135,22 +134,19 @@ async function buscarProdutosML(termo, taxaComissao) {
           score: scoreLucratividade
         };
       });
-  } catch (err) {
-    console.warn(`⚠️ Falha ao consultar ML para "${termo}":`, err.message);
+  } catch {
     return [];
   }
 }
 
 async function buscarViaGoogleSearch(nicho) {
-  console.log(`🔎 Acionando busca web para a categoria: ${nicho.categoria}...`);
+  console.log(`🔎 Buscando produtos reais via Google Search para: ${nicho.categoria}...`);
 
   const prompt = `
-Pesquise no Google produtos reais, populares e atualmente disponíveis para venda no Mercado Livre Brasil (mercadolivre.com.br) relacionados aos seguintes termos: ${nicho.termos.join(", ")}.
+Pesquise no Google 8 produtos reais, populares e bem avaliados vendidos no Mercado Livre Brasil relacionados aos termos: ${nicho.termos.join(", ")}.
+Foque em produtos úteis para o público 55+ e 60+ (preço entre R$ 70 e R$ 500) com marca e modelo reais.
 
-Selecione 8 modelos/marcas reais muito bem avaliados e buscados pelo público 55+ e 60+ (faixa de preço entre R$ 70 e R$ 500).
-Para cada produto, informe o nome comercial exato (marca + modelo real) e o preço médio atual em reais.
-
-Retorne APENAS um JSON válido neste formato:
+Responda SOMENTE com um array JSON válido, sem explicações:
 [
   {
     "produto": "Marca e Modelo Real do Produto",
@@ -161,15 +157,15 @@ Retorne APENAS um JSON válido neste formato:
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
-        tools: [{ googleSearch: {} }],
-        responseMimeType: "application/json"
+        tools: [{ googleSearch: {} }]
       }
     });
 
-    const lista = JSON.parse(response.text || "[]");
+    const lista = extrairArrayJSON(response.text);
+    console.log(`   -> ${lista.length} candidatos encontrados em ${nicho.categoria}`);
 
     return lista.map((item, idx) => {
       const preco = Number(item.preco_medio) || 120;
@@ -194,20 +190,16 @@ Retorne APENAS um JSON válido neste formato:
 async function filtrarComGemini(candidatosPorCategoria, mapaProdutosReais) {
   const prompt = `
 Você é um especialista em e-commerce e comportamento de compra do público 55+ e 60+ no Brasil.
-Abaixo está uma lista de produtos candidatos do Mercado Livre por categoria.
-Para cada categoria, selecione os 6 MELHORES produtos (totalizando 30 itens) que:
-1. Tenham maior utilidade prática, segurança e apelo para o público 55+ (ou filhos comprando para os pais).
-2. Não sejam itens repetidos ou muito parecidos entre si.
-3. Evitem marcas desconhecidas com alto risco de devolução.
+Selecione os 6 MELHORES produtos de cada categoria (totalizando até 30 itens) que tenham maior utilidade prática e segurança para o público 55+.
 
 REGRAS OBRIGATÓRIAS:
-- Você DEVE retornar exatamente o campo "idMl" idêntico ao fornecido no candidato escolhido. NÃO invente nem altere o "idMl".
+- Você DEVE copiar exatamente o campo "idMl" idêntico ao fornecido no candidato escolhido. NÃO invente nem altere o "idMl".
 - Defina "tipo_post" como "REVIEW_INDIVIDUAL" ou "LISTA_COMPARATIVA".
 
 Retorne APENAS um JSON válido:
 [
   {
-    "idMl": "MLB123456789",
+    "idMl": "ID_EXATO_DO_CANDIDATO",
     "slug": "slug-limpo-do-produto",
     "categoria": "Nome da Categoria",
     "produto": "Nome limpo e comercial do produto",
@@ -220,12 +212,12 @@ ${JSON.stringify(candidatosPorCategoria, null, 2)}
 `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-3.6-flash",
+    model: "gemini-2.5-flash",
     contents: prompt,
     config: { responseMimeType: "application/json" }
   });
 
-  const escolhidos = JSON.parse(response.text || "[]");
+  const escolhidos = extrairArrayJSON(response.text);
 
   return escolhidos
     .filter(item => mapaProdutosReais.has(item.idMl))
@@ -255,7 +247,6 @@ async function executarRadar() {
       achados.push(...res);
     }
 
-    // Se a API pública do ML bloquear o runner do GitHub, usa Google Search Grounding + link de busca oficial ML
     if (achados.length < 6) {
       const achadosWeb = await buscarViaGoogleSearch(nicho);
       achados.push(...achadosWeb);
@@ -282,6 +273,12 @@ async function executarRadar() {
     data_radar: hoje
   }));
 
+  console.log(`📦 Total de itens prontos para enviar à planilha: ${itensFormatados.length}`);
+
+  if (itensFormatados.length === 0) {
+    throw new Error("Nenhum produto válido foi retornado pelo radar.");
+  }
+
   const sheetsRes = await fetch(SHEETS_WEBAPP_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -292,6 +289,7 @@ async function executarRadar() {
     })
   });
   const sheetsJson = await sheetsRes.json();
+  console.log("📊 Resposta da planilha:", JSON.stringify(sheetsJson));
 
   const top5Texto = itensFormatados
     .slice(0, 5)
