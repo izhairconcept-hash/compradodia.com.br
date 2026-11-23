@@ -1,4 +1,4 @@
-export function gerarHtmlArtigo(dados, linkGrupoWhatsApp) {
+export function gerarHtmlArtigo(dados, linksComunidade) {
   const {
     slug,
     titulo,
@@ -9,17 +9,19 @@ export function gerarHtmlArtigo(dados, linkGrupoWhatsApp) {
     imagemUrl,
     vereditoRapido,
     introducaoHtml,
-    produtos, // Array: [{ slugLink, nome, selo, resumo, pros, contras, idealPara }]
+    produtos,
     tabelaComparativaHtml,
     guiaCompraHtml,
-    faqs, // Array: [{ pergunta, resposta }]
-    artigosRelacionados // Array: [{ slug, titulo }]
+    faqs,
+    artigosRelacionados
   } = dados;
 
-  const urlCanonica = `https://compradodia.com.br/artigos/${slug}.html`;
-  const imagemFinal = imagemUrl || 'https://compradodia.com.br/assets/og-default.jpg';
+  const linkWhats = linksComunidade?.whatsapp || "https://compradodia.com.br/ofertas/";
+  const linkTelegram = linksComunidade?.telegram || "https://t.me/compradodiaoficial";
 
-  // Schema JSON-LD combinado (Article + ItemList + FAQPage) para SEO e GEO
+  const urlCanonica = `https://compradodia.com.br/artigos/${slug}.html`;
+  const imagemFinal = imagemUrl || "https://compradodia.com.br/assets/og-default.jpg";
+
   const schemaGraph = {
     "@context": "https://schema.org",
     "@graph": [
@@ -74,8 +76,8 @@ export function gerarHtmlArtigo(dados, linkGrupoWhatsApp) {
       <p>${prod.resumo}</p>
       <p><strong>Indicado para:</strong> ${prod.idealPara}</p>
       <ul>
-        ${prod.pros.map(p => `<li>✅ ${p}</li>`).join('')}
-        ${prod.contras.map(c => `<li>⚠️ Atenção: ${c}</li>`).join('')}
+        ${prod.pros.map(p => `<li>✅ ${p}</li>`).join("")}
+        ${prod.contras.map(c => `<li>⚠️ Atenção: ${c}</li>`).join("")}
       </ul>
       <div class="cta-box">
         <a href="/ir/?p=${prod.slugLink}" class="btn-ml" target="_blank" rel="nofollow sponsored noopener">
@@ -86,25 +88,25 @@ export function gerarHtmlArtigo(dados, linkGrupoWhatsApp) {
         </span>
       </div>
     </section>
-  `).join('\n');
+  `).join("\n");
 
   const faqsHtml = faqs.map(f => `
     <div class="faq-item">
       <div class="faq-question">${f.pergunta}</div>
       <div class="faq-answer">${f.resposta}</div>
     </div>
-  `).join('\n');
+  `).join("\n");
 
   const relacionadosHtml = artigosRelacionados && artigosRelacionados.length > 0
     ? `
       <section style="margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--border);">
         <h3>Leia Também no Compra do Dia</h3>
         <ul>
-          ${artigosRelacionados.map(r => `<li><a href="/artigos/${r.slug}.html">${r.titulo}</a></li>`).join('')}
+          ${artigosRelacionados.map(r => `<li><a href="/artigos/${r.slug}.html">${r.titulo}</a></li>`).join("")}
         </ul>
       </section>
     `
-    : '';
+    : "";
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -116,7 +118,6 @@ export function gerarHtmlArtigo(dados, linkGrupoWhatsApp) {
   <meta name="robots" content="index, follow, max-image-preview:large">
   <link rel="canonical" href="${urlCanonica}">
 
-  <!-- Open Graph / Facebook / WhatsApp / Google Discover -->
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="Compra do Dia">
   <meta property="og:title" content="${titulo}">
@@ -130,6 +131,13 @@ export function gerarHtmlArtigo(dados, linkGrupoWhatsApp) {
 <body>
   <div class="disclosure-bar">
     <strong>Guia Independente:</strong> Analisamos produtos bem avaliados. Ao clicar nos botões, você é levado ao site oficial do <strong>Mercado Livre</strong> para concluir sua compra com segurança. Podemos receber comissão sem custo extra para você.
+  </div>
+
+  <!-- Isca 1: Barra Superior Discreta -->
+  <div class="vip-top-bar">
+    📲 Receba 1 achado útil por dia (sem spam):
+    <a href="${linkWhats}" target="_blank" rel="noopener">Grupo WhatsApp</a> •
+    <a href="${linkTelegram}" target="_blank" rel="noopener">Canal Telegram</a>
   </div>
 
   <header class="site-header">
@@ -150,7 +158,7 @@ export function gerarHtmlArtigo(dados, linkGrupoWhatsApp) {
         Por <strong>Redação Compra do Dia</strong> • Atualizado em ${dataFormatada}
       </div>
 
-      <!-- Bloco Veredito Rápido (Otimizado para GEO: ChatGPT, Gemini, Perplexity) -->
+      <!-- Bloco Veredito Rápido (Otimizado para GEO) -->
       <div class="tldr-box">
         <span class="tldr-title">📌 Resumo Rápido (Veredito)</span>
         <p style="margin-bottom:0;">${vereditoRapido}</p>
@@ -163,12 +171,27 @@ export function gerarHtmlArtigo(dados, linkGrupoWhatsApp) {
         ${tabelaComparativaHtml}
       </div>
 
+      <!-- Isca 2: Alerta de Queda de Preço (Meio do Artigo) -->
+      <aside class="vip-capture-box mid-article">
+        <h3>📉 Não quer comprar hoje ou quer esperar baixar o preço?</h3>
+        <p style="margin-bottom: 8px;">Monitoramos diariamente as ofertas relâmpago do <strong>Mercado Livre Full</strong>. Entre gratuitamente e receba apenas 1 a 2 achados úteis por dia:</p>
+        <div class="vip-rules">
+          <span>🔇 Grupo Silencioso (Só Admins)</span>
+          <span>🔒 Telefone Protegido</span>
+          <span>🆓 100% Gratuito</span>
+        </div>
+        <div class="vip-buttons-row">
+          <a href="${linkWhats}" class="btn-whats-vip" target="_blank" rel="noopener">🟢 Receber no WhatsApp</a>
+          <a href="${linkTelegram}" class="btn-tele-vip" target="_blank" rel="noopener">🔵 Receber no Telegram</a>
+        </div>
+      </aside>
+
       <h2>Análise Detalhada e Onde Comprar com Segurança</h2>
       ${cardsProdutosHtml}
 
       ${guiaCompraHtml}
 
-      <!-- Bloco Educativo de Segurança -->
+      <!-- Isca 3: Bloco Educativo de Segurança -->
       <section class="how-it-works">
         <h3 style="margin-top:0;">🛡️ Como funciona a compra pelo Compra do Dia?</h3>
         <ol style="margin-bottom:0;">
@@ -181,11 +204,19 @@ export function gerarHtmlArtigo(dados, linkGrupoWhatsApp) {
       <h2>Perguntas Frequentes</h2>
       ${faqsHtml}
 
-      <!-- Captura Silenciosa WhatsApp -->
-      <aside class="whatsapp-banner">
-        <h3 style="margin-top:0; color:#14532d;">📲 Receba 1 Achado Útil por Dia no seu WhatsApp</h3>
-        <p style="margin-bottom:8px;">Sem bate-papo e sem mensagens chatas. Enviamos apenas produtos bem avaliados do Mercado Livre que facilitam o dia a dia.</p>
-        <a href="${linkGrupoWhatsApp}" class="btn-whats" target="_blank" rel="noopener">Entrar no Grupo Gratuito do WhatsApp ➔</a>
+      <!-- Isca 4: Fechamento VIP Duplo (WhatsApp + Telegram) -->
+      <aside class="vip-capture-box">
+        <h3>🎁 Quer receber só produtos testados e com entrega rápida?</h3>
+        <p style="margin-bottom: 8px;">Evite compras ruins e economize tempo. Nossa curadoria envia diariamente as melhores oportunidades verificadas do Mercado Livre:</p>
+        <div class="vip-rules">
+          <span>🔇 Sem bate-papo nem correntes</span>
+          <span>⭐ Apenas produtos bem avaliados</span>
+          <span>🚪 Saia quando quiser</span>
+        </div>
+        <div class="vip-buttons-row">
+          <a href="${linkWhats}" class="btn-whats-vip" target="_blank" rel="noopener">🟢 Entrar no Grupo WhatsApp</a>
+          <a href="${linkTelegram}" class="btn-tele-vip" target="_blank" rel="noopener">🔵 Entrar no Canal Telegram</a>
+        </div>
       </aside>
 
       ${relacionadosHtml}
@@ -194,7 +225,7 @@ export function gerarHtmlArtigo(dados, linkGrupoWhatsApp) {
 
   <footer class="site-footer">
     <div class="container">
-      <p><strong>Compra do Dia</strong> (`compradodia.com.br`) é um portal independente de curadoria e comparação de produtos.</p>
+      <p><strong>Compra do Dia</strong> (compradodia.com.br) — Curadoria independente de compras.</p>
       <p>Aviso de Afiliado: Participamos do Programa de Afiliados do Mercado Livre. Todas as transações, pagamentos, entregas e garantias são realizadas exclusivamente dentro da plataforma oficial do Mercado Livre.</p>
     </div>
   </footer>
