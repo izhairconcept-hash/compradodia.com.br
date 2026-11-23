@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { GoogleGenAI } from "@google/genai";
 import { gerarHtmlArtigo } from "./template-artigo.js";
 
@@ -7,17 +6,18 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SHEETS_WEBAPP_URL = process.env.SHEETS_WEBAPP_URL;
 const SHEETS_SECRET = process.env.SHEETS_SECRET;
 
-// Facebook Graph API (Página)
+// Facebook Graph API (Opcional)
 const FB_PAGE_ID = process.env.FB_PAGE_ID;
 const FB_PAGE_ACCESS_TOKEN = process.env.FB_PAGE_ACCESS_TOKEN;
 
-// WhatsApp (Z-API)
-const ZAPI_INSTANCE_ID = process.env.ZAPI_INSTANCE_ID;
-const ZAPI_TOKEN = process.env.ZAPI_TOKEN;
-const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN;
-const WHATSAPP_GRUPO_VIP_ID = process.env.WHATSAPP_GRUPO_VIP_ID; // Ex: 1203630...@g.us
-const SEU_WHATSAPP = process.env.SEU_WHATSAPP; // Para você encaminhar em 1 clique no Canal
-const LINK_CONVITE_GRUPO_VIP = process.env.LINK_CONVITE_GRUPO_VIP || "https://compradodia.com.br/ofertas/";
+// Telegram (Custo Zero)
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const TELEGRAM_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID || "@compradodiaoficial";
+
+// Links das Comunidades VIP (Iscas no Site)
+const LINK_GRUPO_WHATSAPP = process.env.LINK_GRUPO_WHATSAPP || "https://compradodia.com.br/ofertas/";
+const LINK_CANAL_TELEGRAM = process.env.LINK_CANAL_TELEGRAM || "https://t.me/compradodiaoficial";
 
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
@@ -32,10 +32,24 @@ function lerJsonSeguro(caminho, padrao) {
   return JSON.parse(fs.readFileSync(caminho, "utf-8"));
 }
 
+async function enviarTelegram(chatId, texto) {
+  if (!TELEGRAM_BOT_TOKEN || !chatId) return;
+  const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: texto,
+      parse_mode: "HTML",
+      disable_web_page_preview: false
+    })
+  });
+  return res.json();
+}
+
 async function buscarFilaAprovada() {
   const res = await fetch(`${SHEETS_WEBAPP_URL}?token=${encodeURIComponent(SHEETS_SECRET)}`);
   const rows = await res.json();
-  // Filtra linhas que têm link oficial mercadolivre.com/sec/... preenchido e ainda não foram publicadas
   return rows.filter(r =>
     r.status !== "PUBLICADO" &&
     typeof r.link_afiliado_ml === "string" &&
@@ -85,8 +99,8 @@ Retorne APENAS um JSON válido com esta estrutura exata:
     { "pergunta": "A compra é feita com segurança no Mercado Livre?", "resposta": "Sim. Ao clicar nos botões desta página, você é levado diretamente ao anúncio oficial no Mercado Livre, com Compra Garantida e devolução grátis." },
     { "pergunta": "É difícil de instalar ou usar no dia a dia?", "resposta": "Explicação simples sobre a facilidade de uso." }
   ],
-  "postFacebook": "Texto envolvente de 3 a 4 linhas para postar na Página do Facebook despertando curiosidade e utilidade (sem parecer propaganda agressiva).",
-  "cardWhatsApp": "Mensagem curta com emojis moderados, destacando o problema resolvido, preço aproximado (R$ ${item.preco_medio}) e chamada para ler/ver no Mercado Livre."
+  "postFacebook": "Texto envolvente de 3 a 4 linhas para postar na Página do Facebook despertando curiosidade e utilidade.",
+  "cardMensageiro": "Texto curto (sem tags HTML) destacando o problema resolvido, preço aproximado (R$ ${item.preco_medio}) e por que vale a pena."
 }
 `;
 
@@ -102,7 +116,6 @@ Retorne APENAS um JSON válido com esta estrutura exata:
 }
 
 function atualizarIndexESitemap(publicados, linksMap) {
-  // 1. Atualiza index.html (Capa do Portal)
   const cardsHome = publicados
     .slice()
     .reverse()
@@ -131,6 +144,11 @@ function atualizarIndexESitemap(publicados, linksMap) {
   <div class="disclosure-bar">
     <strong>Guia Independente:</strong> Pesquisamos os produtos mais bem avaliados. As compras são concluídas diretamente no site oficial do <strong>Mercado Livre</strong>.
   </div>
+  <div class="vip-top-bar">
+    📲 Receba 1 achado útil por dia (sem spam):
+    <a href="${LINK_GRUPO_WHATSAPP}" target="_blank" rel="noopener">Grupo WhatsApp</a> •
+    <a href="${LINK_CANAL_TELEGRAM}" target="_blank" rel="noopener">Canal Telegram</a>
+  </div>
   <header class="site-header">
     <div class="container">
       <a href="/" class="logo">Compra<span>doDia</span></a>
@@ -157,7 +175,6 @@ function atualizarIndexESitemap(publicados, linksMap) {
 </html>`;
   fs.writeFileSync("index.html", homeHtml, "utf-8");
 
-  // 2. Atualiza ofertas/index.html (Vitrine rápida estilo Linktree para Bio das Redes Sociais)
   const itensVitrine = Object.entries(linksMap)
     .reverse()
     .slice(0, 20)
@@ -188,6 +205,15 @@ function atualizarIndexESitemap(publicados, linksMap) {
     </div>
   </header>
   <main class="container">
+    <aside class="vip-capture-box" style="margin-top: 22px;">
+      <h3>📲 Entre na nossa Lista Silenciosa de Achados</h3>
+      <p style="margin-bottom: 10px;">Receba 1 a 2 ofertas verificadas por dia no celular (sem spam):</p>
+      <div class="vip-buttons-row">
+        <a href="${LINK_GRUPO_WHATSAPP}" class="btn-whats-vip" target="_blank" rel="noopener">🟢 Grupo WhatsApp</a>
+        <a href="${LINK_CANAL_TELEGRAM}" class="btn-tele-vip" target="_blank" rel="noopener">🔵 Canal Telegram</a>
+      </div>
+    </aside>
+
     <h1 style="font-size: 26px; margin-top: 24px;">🔥 Destaques Selecionados</h1>
     <p style="color: #475569;">Toque no item desejado para abrir o anúncio oficial direto no Mercado Livre:</p>
     ${itensVitrine}
@@ -196,7 +222,6 @@ function atualizarIndexESitemap(publicados, linksMap) {
 </html>`;
   fs.writeFileSync("ofertas/index.html", vitrineHtml, "utf-8");
 
-  // 3. Atualiza sitemap.xml
   const urlsXml = [
     `  <url><loc>https://compradodia.com.br/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`,
     ...publicados.map(a => `  <url><loc>https://compradodia.com.br/artigos/${a.slug}.html</loc><lastmod>${a.dataIso}</lastmod><priority>0.8</priority></url>`)
@@ -209,7 +234,7 @@ function atualizarIndexESitemap(publicados, linksMap) {
 async function postarNoFacebook(mensagem, urlArtigo) {
   if (!FB_PAGE_ID || !FB_PAGE_ACCESS_TOKEN) return;
   const endpoint = `https://graph.facebook.com/v21.0/${FB_PAGE_ID}/feed`;
-  const res = await fetch(endpoint, {
+  await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -218,20 +243,6 @@ async function postarNoFacebook(mensagem, urlArtigo) {
       access_token: FB_PAGE_ACCESS_TOKEN
     })
   });
-  const data = await res.json();
-  console.log("📘 Resposta Facebook Graph API:", data);
-}
-
-async function enviarWhatsAppZApi(destino, texto) {
-  if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !destino) return;
-  await fetch(`https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-text`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Client-Token": ZAPI_CLIENT_TOKEN
-    },
-    body: JSON.stringify({ phone: destino, message: texto })
-  });
 }
 
 async function executarPublicacao() {
@@ -239,11 +250,10 @@ async function executarPublicacao() {
   const fila = await buscarFilaAprovada();
 
   if (fila.length === 0) {
-    console.log("⏸️ Nenhum produto com status PRONTO e link preenchido na planilha.");
+    console.log("⏸️ Nenhum produto com link preenchido na planilha.");
     return;
   }
 
-  // Processa 1 artigo por execução do cron (evita rajada e espaça os posts ao longo do dia)
   const item = fila[0];
   console.log(`✍️ Gerando artigo para: ${item.produto}...`);
 
@@ -255,7 +265,6 @@ async function executarPublicacao() {
   const dataIso = agora.toISOString().split("T")[0];
   const dataFormatada = agora.toLocaleDateString("pt-BR");
 
-  // Salva o link oficial no mapa centralizado (/ir/?p=slug)
   linksMap[item.slug] = {
     titulo: item.produto,
     url: item.link_afiliado_ml.trim(),
@@ -264,7 +273,6 @@ async function executarPublicacao() {
   };
   fs.writeFileSync("data/links.json", JSON.stringify(linksMap, null, 2), "utf-8");
 
-  // Gera o HTML da página estática
   const htmlFinal = gerarHtmlArtigo(
     {
       slug: item.slug,
@@ -281,7 +289,7 @@ async function executarPublicacao() {
       faqs: conteudo.faqs,
       artigosRelacionados: conteudo.artigosRelacionados
     },
-    LINK_CONVITE_GRUPO_VIP
+    { whatsapp: LINK_GRUPO_WHATSAPP, telegram: LINK_CANAL_TELEGRAM }
   );
 
   fs.writeFileSync(`artigos/${item.slug}.html`, htmlFinal, "utf-8");
@@ -295,26 +303,23 @@ async function executarPublicacao() {
   });
   fs.writeFileSync("data/publicados.json", JSON.stringify(publicados, null, 2), "utf-8");
 
-  // Atualiza Home, Vitrine /ofertas/ e Sitemap
   atualizarIndexESitemap(publicados, linksMap);
 
   const urlArtigo = `https://compradodia.com.br/artigos/${item.slug}.html`;
   const urlDiretaMl = `https://compradodia.com.br/ir/?p=${item.slug}`;
 
-  // 1. Publica na Página do Facebook
+  // 1. Publica na Página do Facebook (se configurado)
   await postarNoFacebook(`${conteudo.postFacebook}\n\n👇 Leia a análise completa e veja no Mercado Livre:`, urlArtigo);
 
-  // 2. Dispara no Grupo VIP do WhatsApp (100% automático)
-  const msgGrupo = `${conteudo.cardWhatsApp}\n\n📖 *Leia a análise:* ${urlArtigo}\n🛒 *Ir direto ao Mercado Livre:* ${urlDiretaMl}`;
-  await enviarWhatsAppZApi(WHATSAPP_GRUPO_VIP_ID, msgGrupo);
+  // 2. Publica automaticamente no Canal Público do Telegram (@compradodiaoficial)
+  const msgCanalTelegram = `🔥 <b>${conteudo.titulo}</b>\n\n${conteudo.cardMensageiro}\n\n📖 <b>Leia a análise completa:</b>\n${urlArtigo}\n\n🛒 <b>Ver direto no Mercado Livre:</b>\n${urlDiretaMl}`;
+  await enviarTelegram(TELEGRAM_CHANNEL_ID, msgCanalTelegram);
 
-  // 3. Manda no seu WhatsApp pessoal para você encaminhar em 1 clique no Canal do WhatsApp
-  await enviarWhatsAppZApi(
-    SEU_WHATSAPP,
-    `✅ *Artigo Publicado no Compra do Dia!*\nEncaminhe a mensagem abaixo para o seu Canal do WhatsApp:\n\n---\n${msgGrupo}`
-  );
+  // 3. Envia no seu Telegram Pessoal pronto para você encaminhar ao Grupo VIP do WhatsApp
+  const msgParaEncaminharWhats = `✅ <b>Artigo Publicado!</b> Copie ou encaminhe o texto abaixo para o seu Grupo VIP do WhatsApp:\n\n🔥 *${conteudo.titulo}*\n\n${conteudo.cardMensageiro}\n\n📖 *Leia a análise:* ${urlArtigo}\n🛒 *Ver no Mercado Livre:* ${urlDiretaMl}`;
+  await enviarTelegram(TELEGRAM_CHAT_ID, msgParaEncaminharWhats);
 
-  // 4. Marca linha como PUBLICADO no Google Sheets
+  // 4. Marca como PUBLICADO na planilha
   await fetch(SHEETS_WEBAPP_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -325,7 +330,7 @@ async function executarPublicacao() {
     })
   });
 
-  console.log(`🎉 Publicação concluída com sucesso: ${urlArtigo}`);
+  console.log(`🎉 Publicação concluída: ${urlArtigo}`);
 }
 
 executarPublicacao().catch(err => {
