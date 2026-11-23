@@ -3,14 +3,11 @@ import { GoogleGenAI } from "@google/genai";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SHEETS_WEBAPP_URL = process.env.SHEETS_WEBAPP_URL;
 const SHEETS_SECRET = process.env.SHEETS_SECRET;
-const ZAPI_INSTANCE_ID = process.env.ZAPI_INSTANCE_ID;
-const ZAPI_TOKEN = process.env.ZAPI_TOKEN;
-const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN;
-const SEU_WHATSAPP = process.env.SEU_WHATSAPP; // Ex: 5531999999999
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
-// Configuração das 5 categorias-alvo com taxas reais de comissão ML e termos de alta conversão 55+
 const NICHOS_RADAR = [
   {
     categoria: "Casa e Segurança",
@@ -49,6 +46,20 @@ function slugify(texto) {
     .substring(0, 65);
 }
 
+async function enviarTelegram(chatId, texto) {
+  if (!TELEGRAM_BOT_TOKEN || !chatId) return;
+  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: texto,
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    })
+  });
+}
+
 async function buscarProdutosML(termo, taxaComissao) {
   const url = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(termo)}&shipping=fulfillment&sort=sold_quantity_desc&limit=12`;
   const res = await fetch(url);
@@ -62,7 +73,6 @@ async function buscarProdutosML(termo, taxaComissao) {
       const nota = item.reviews?.rating_average || 0;
       const comissaoReais = preco * taxaComissao;
 
-      // Filtros de qualidade e lucratividade mínima (R$ 8,50 de comissão por venda)
       return (
         preco >= 65 &&
         preco <= 480 &&
@@ -74,7 +84,6 @@ async function buscarProdutosML(termo, taxaComissao) {
     .map(item => {
       const comissaoReais = Number((item.price * taxaComissao).toFixed(2));
       const vendasScore = Math.log10((item.reviews?.total || 10) + 1);
-      // Score equilibra chance de venda (volume) com ganho financeiro em R$
       const scoreLucratividade = Number((comissaoReais * vendasScore).toFixed(2));
 
       return {
@@ -99,9 +108,9 @@ Para cada categoria, selecione os 6 MELHORES produtos (totalizando 30 itens) que
 2. Não sejam itens repetidos ou muito parecidos entre si.
 3. Evitem marcas desconhecidas com alto risco de devolução.
 
-Para cada item escolhido, defina também se o melhor formato de artigo é "REVIEW_INDIVIDUAL" (produto muito desejado sozinho) ou "LISTA_COMPARATIVA" (bom para agrupar em rankings).
+Defina também se o melhor formato de artigo é "REVIEW_INDIVIDUAL" ou "LISTA_COMPARATIVA".
 
-Retorne APENAS um JSON válido no formato:
+Retorne APENAS um JSON válido:
 [
   {
     "slug": "slug-limpo-do-produto",
@@ -137,7 +146,6 @@ async function executarRadar() {
       const res = await buscarProdutosML(termo, nicho.taxaComissao);
       achados.push(...res);
     }
-    // Remove duplicados e ordena pelo maior Score de Lucratividade
     const unicos = Array.from(new Map(achados.map(i => [i.idMl, i])).values())
       .sort((a, b) => b.score - a.score)
       .slice(0, 12);
@@ -145,7 +153,6 @@ async function executarRadar() {
     candidatosPorCategoria[nicho.categoria] = unicos;
   }
 
-  console.log("🧠 Curadoria final com Gemini API...");
   const selecionados = await filtrarComGemini(candidatosPorCategoria);
   const hoje = new Date().toISOString().split("T")[0];
 
@@ -155,7 +162,6 @@ async function executarRadar() {
     data_radar: hoje
   }));
 
-  // Envia para o Google Sheets
   const sheetsRes = await fetch(SHEETS_WEBAPP_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -166,30 +172,16 @@ async function executarRadar() {
     })
   });
   const sheetsJson = await sheetsRes.json();
-  console.log("📊 Resultado Google Sheets:", sheetsJson);
 
-  // Envia alerta no seu WhatsApp via Z-API
-  if (ZAPI_INSTANCE_ID && ZAPI_TOKEN && SEU_WHATSAPP) {
-    const top3Texto = itensFormatados
-      .slice(0, 3)
-      .map((p, i) => `${i + 1}. ${p.produto} (~R$ ${p.comissao_estimada_rs} comiss.)`)
-      .join("\n");
+  const top5Texto = itensFormatados
+    .slice(0, 5)
+    .map((p, i) => `${i + 1}. <b>${p.produto}</b> (~R$ ${p.comissao_estimada_rs} comiss.)`)
+    .join("\n");
 
-    const mensagem = `🚀 *Radar Semanal Compra do Dia Pronto!*\n\nForam adicionados *${sheetsJson.adicionados || itensFormatados.length} novos produtos* de alta conversão na planilha.\n\n*Destaques de lucro:*\n${top3Texto}\n\n👉 Abra a planilha *CompraDoDia - Controle*, gere seus links no Mercado Livre e cole na coluna G para o robô começar a publicar!`;
+  const mensagem = `🚀 <b>Radar Semanal Compra do Dia Pronto!</b>\n\nForam adicionados <b>${sheetsJson.adicionados || itensFormatados.length} novos produtos</b> na planilha.\n\n<b>Top 5 destaques de lucro:</b>\n${top5Texto}\n\n👉 Abra a planilha <i>CompraDoDia - Controle</i>, gere seus links no Mercado Livre e cole na coluna G!`;
 
-    await fetch(`https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-text`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Client-Token": ZAPI_CLIENT_TOKEN
-      },
-      body: JSON.stringify({
-        phone: SEU_WHATSAPP,
-        message: mensagem
-      })
-    });
-    console.log("📲 Alerta enviado no WhatsApp!");
-  }
+  await enviarTelegram(TELEGRAM_CHAT_ID, mensagem);
+  console.log("📲 Alerta enviado no Telegram!");
 }
 
 executarRadar().catch(err => {
