@@ -1,0 +1,48 @@
+name: Publicar Conteudo e Distribuir
+
+on:
+  schedule:
+    # Fase 1 (Aquecimento - 2x/dia): 09h e 18h BRT
+    - cron: '0 12,21 * * *'
+    # Fase 2 (Escala - 4x/dia): troque a linha acima por:
+    # - cron: '0 11,14,18,22 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependências
+        run: npm install
+
+      - name: Gerar Artigo, Atualizar Site e Disparar Redes
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SHEETS_WEBAPP_URL: ${{ secrets.SHEETS_WEBAPP_URL }}
+          SHEETS_SECRET: ${{ secrets.SHEETS_SECRET }}
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          LINK_CANAL_TELEGRAM: ${{ secrets.LINK_CANAL_TELEGRAM }}
+          LINK_GRUPO_WHATSAPP: ${{ secrets.LINK_GRUPO_WHATSAPP }}
+        run: node scripts/publicar-conteudo.js
+
+      - name: Commit e Push para GitHub Pages
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add .
+          git diff --quiet && git diff --staged --quiet || (git commit -m "chore: publica novo artigo e atualiza sitemap" && git push)
