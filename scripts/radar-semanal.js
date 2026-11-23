@@ -9,56 +9,11 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 const NICHOS_RADAR = [
-  {
-    categoria: "Casa e Segurança",
-    taxaComissao: 0.12,
-    termos: [
-      "luz noturna sensor presenca",
-      "fechadura digital senha",
-      "purificador agua parede",
-      "torneira eletrica cozinha"
-    ]
-  },
-  {
-    categoria: "Ferramentas e Utilidades",
-    taxaComissao: 0.12,
-    termos: [
-      "parafusadeira sem fio 12v",
-      "lavadora alta pressao",
-      "maleta ferramentas completo",
-      "trena laser digital"
-    ]
-  },
-  {
-    categoria: "Beleza e Cuidado Pessoal",
-    taxaComissao: 0.16,
-    termos: [
-      "escova secadora modeladora",
-      "massageador eletrico cervical",
-      "aparador pelos nariz barba",
-      "balanca digital bioimpedancia"
-    ]
-  },
-  {
-    categoria: "Saúde e Bem-Estar",
-    taxaComissao: 0.10,
-    termos: [
-      "medidor pressao digital braco omron",
-      "umidificador ar ultrassonico",
-      "travesseiro ortopedico cervical",
-      "oximetro dedo digital"
-    ]
-  },
-  {
-    categoria: "Eletroportáteis",
-    taxaComissao: 0.06,
-    termos: [
-      "cafeteira eletrica desligamento automatico",
-      "aspirador vertical sem fio",
-      "chaleira eletrica controle temperatura",
-      "air fryer painel analogico"
-    ]
-  }
+  { categoria: "Casa e Segurança", taxaComissao: 0.12 },
+  { categoria: "Ferramentas e Utilidades", taxaComissao: 0.12 },
+  { categoria: "Beleza e Cuidado Pessoal", taxaComissao: 0.16 },
+  { categoria: "Saúde e Bem-Estar", taxaComissao: 0.10 },
+  { categoria: "Eletroportáteis", taxaComissao: 0.06 }
 ];
 
 function slugify(texto) {
@@ -98,117 +53,33 @@ async function enviarTelegram(chatId, texto) {
   });
 }
 
-async function buscarProdutosML(termo, taxaComissao) {
-  const url = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(termo)}&sort=sold_quantity_desc&limit=15`;
-
-  try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept": "application/json"
-      }
-    });
-
-    if (!res.ok) return [];
-    const json = await res.json();
-
-    return (json.results || [])
-      .filter(item => {
-        const preco = item.price || 0;
-        const comissaoReais = preco * taxaComissao;
-        const temLinkValido = typeof item.permalink === "string" && item.permalink.startsWith("http");
-
-        return temLinkValido && preco >= 65 && preco <= 550 && comissaoReais >= 7.5;
-      })
-      .map(item => {
-        const comissaoReais = Number((item.price * taxaComissao).toFixed(2));
-        const vendasScore = Math.log10((item.sold_quantity || item.reviews?.total || 10) + 1);
-        const scoreLucratividade = Number((comissaoReais * vendasScore).toFixed(2));
-
-        return {
-          idMl: item.id,
-          produto: item.title,
-          preco_medio: item.price,
-          comissao_estimada_rs: comissaoReais,
-          url_original_ml: item.permalink,
-          score: scoreLucratividade
-        };
-      });
-  } catch {
-    return [];
-  }
-}
-
-async function buscarViaGoogleSearch(nicho) {
-  console.log(`🔎 Buscando produtos reais via Google Search para: ${nicho.categoria}...`);
+async function minerarTodosOsNichos() {
+  console.log("🔎 Minerando 30 produtos reais em chamada única na Gemini API...");
 
   const prompt = `
-Pesquise no Google 8 produtos reais, populares e bem avaliados vendidos no Mercado Livre Brasil relacionados aos termos: ${nicho.termos.join(", ")}.
-Foque em produtos úteis para o público 55+ e 60+ (preço entre R$ 70 e R$ 500) com marca e modelo reais.
+Você é um especialista em e-commerce e comportamento de compra do público 55+ e 60+ no Brasil, atuando como curador do portal Compra do Dia (afiliado Mercado Livre).
 
-Responda SOMENTE com um array JSON válido, sem explicações:
-[
-  {
-    "produto": "Marca e Modelo Real do Produto",
-    "preco_medio": 149.90
-  }
-]
-`;
+Selecione exatamente 30 produtos REAIS, populares, de marcas confiáveis e atualmente vendidos no Mercado Livre Brasil (faixa de preço entre R$ 75 e R$ 550), distribuídos igualmente em 6 produtos por categoria:
+1. "Casa e Segurança" (ex.: fechadura digital, câmera Wi-Fi, luz noturna com sensor, purificador de água, barra de apoio)
+2. "Ferramentas e Utilidades" (ex.: parafusadeira sem fio 12V, lavadora de alta pressão, trena laser, maleta de ferramentas)
+3. "Beleza e Cuidado Pessoal" (ex.: escova secadora, massageador cervical, aparador de pelos, balança digital)
+4. "Saúde e Bem-Estar" (ex.: medidor de pressão de braço Omron, umidificador ultrassônico, travesseiro ortopédico, oxímetro)
+5. "Eletroportáteis" (ex.: cafeteira elétrica, aspirador vertical sem fio, chaleira elétrica, air fryer)
 
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: prompt,
-      config: {
-        tools: [{ googleSearch: {} }]
-      }
-    });
-
-    const lista = extrairArrayJSON(response.text);
-    console.log(`   -> ${lista.length} candidatos encontrados em ${nicho.categoria}`);
-
-    return lista.map((item, idx) => {
-      const preco = Number(item.preco_medio) || 120;
-      const comissao = Number((preco * nicho.taxaComissao).toFixed(2));
-      const idVirtual = `SEARCH-${slugify(nicho.categoria)}-${idx}`;
-
-      return {
-        idMl: idVirtual,
-        produto: item.produto,
-        preco_medio: preco,
-        comissao_estimada_rs: comissao,
-        url_original_ml: linkBuscaGarantidaML(item.produto),
-        score: comissao
-      };
-    });
-  } catch (err) {
-    console.error(`Erro na busca web de ${nicho.categoria}:`, err.message);
-    return [];
-  }
-}
-
-async function filtrarComGemini(candidatosPorCategoria, mapaProdutosReais) {
-  const prompt = `
-Você é um especialista em e-commerce e comportamento de compra do público 55+ e 60+ no Brasil.
-Selecione os 6 MELHORES produtos de cada categoria (totalizando até 30 itens) que tenham maior utilidade prática e segurança para o público 55+.
-
-REGRAS OBRIGATÓRIAS:
-- Você DEVE copiar exatamente o campo "idMl" idêntico ao fornecido no candidato escolhido. NÃO invente nem altere o "idMl".
+Regras:
+- Informe marca e modelo reais e bem avaliados no Brasil.
+- Não repita produtos parecidos.
 - Defina "tipo_post" como "REVIEW_INDIVIDUAL" ou "LISTA_COMPARATIVA".
 
-Retorne APENAS um JSON válido:
+Responda SOMENTE com um array JSON válido, sem markdown ou texto extra:
 [
   {
-    "idMl": "ID_EXATO_DO_CANDIDATO",
-    "slug": "slug-limpo-do-produto",
-    "categoria": "Nome da Categoria",
-    "produto": "Nome limpo e comercial do produto",
+    "categoria": "Casa e Segurança",
+    "produto": "Marca e Modelo Real do Produto",
+    "preco_medio": 189.90,
     "tipo_post": "REVIEW_INDIVIDUAL"
   }
 ]
-
-Candidatos:
-${JSON.stringify(candidatosPorCategoria, null, 2)}
 `;
 
   const response = await ai.models.generateContent({
@@ -217,55 +88,30 @@ ${JSON.stringify(candidatosPorCategoria, null, 2)}
     config: { responseMimeType: "application/json" }
   });
 
-  const escolhidos = extrairArrayJSON(response.text);
+  const listaBruta = extrairArrayJSON(response.text);
+  const taxasMap = new Map(NICHOS_RADAR.map(n => [n.categoria.toLowerCase(), n.taxaComissao]));
 
-  return escolhidos
-    .filter(item => mapaProdutosReais.has(item.idMl))
-    .map(item => {
-      const original = mapaProdutosReais.get(item.idMl);
-      return {
-        slug: slugify(item.slug || item.produto || original.produto),
-        categoria: item.categoria,
-        produto: item.produto || original.produto,
-        preco_medio: original.preco_medio,
-        comissao_estimada_rs: original.comissao_estimada_rs,
-        url_original_ml: original.url_original_ml,
-        tipo_post: item.tipo_post || "REVIEW_INDIVIDUAL"
-      };
-    });
+  return listaBruta.map(item => {
+    const preco = Number(item.preco_medio) || 150;
+    const taxa = taxasMap.get(String(item.categoria || "").toLowerCase()) || 0.10;
+    const comissao = Number((preco * taxa).toFixed(2));
+
+    return {
+      slug: slugify(item.produto),
+      categoria: item.categoria || "Utilidades",
+      produto: item.produto,
+      preco_medio: preco,
+      comissao_estimada_rs: comissao,
+      url_original_ml: linkBuscaGarantidaML(item.produto),
+      tipo_post: item.tipo_post || "REVIEW_INDIVIDUAL"
+    };
+  });
 }
 
 async function executarRadar() {
   console.log("🔍 Iniciando Radar Semanal Mercado Livre...");
-  const candidatosPorCategoria = {};
-  const mapaProdutosReais = new Map();
 
-  for (const nicho of NICHOS_RADAR) {
-    let achados = [];
-    for (const termo of nicho.termos) {
-      const res = await buscarProdutosML(termo, nicho.taxaComissao);
-      achados.push(...res);
-    }
-
-    if (achados.length < 6) {
-      const achadosWeb = await buscarViaGoogleSearch(nicho);
-      achados.push(...achadosWeb);
-    }
-
-    const unicos = Array.from(new Map(achados.map(i => [i.idMl, i])).values())
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 12);
-
-    unicos.forEach(item => mapaProdutosReais.set(item.idMl, item));
-    candidatosPorCategoria[nicho.categoria] = unicos.map(({ idMl, produto, preco_medio, comissao_estimada_rs }) => ({
-      idMl,
-      produto,
-      preco_medio,
-      comissao_estimada_rs
-    }));
-  }
-
-  const selecionados = await filtrarComGemini(candidatosPorCategoria, mapaProdutosReais);
+  const selecionados = await minerarTodosOsNichos();
   const hoje = new Date().toISOString().split("T")[0];
 
   const itensFormatados = selecionados.map(item => ({
