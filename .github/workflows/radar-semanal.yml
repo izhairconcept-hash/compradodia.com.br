@@ -1,0 +1,33 @@
+name: Radar Semanal Mercado Livre
+
+on:
+  schedule:
+    # Toda segunda-feira às 10:00 UTC (07:00 horário de Brasília)
+    - cron: '0 10 * * 1'
+  workflow_dispatch: # Permite testar manualmente a qualquer momento
+
+jobs:
+  radar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependências
+        run: npm install @google/genai
+
+      - name: Executar Radar Semanal
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SHEETS_WEBAPP_URL: ${{ secrets.SHEETS_WEBAPP_URL }}
+          SHEETS_SECRET: ${{ secrets.SHEETS_SECRET }}
+          ZAPI_INSTANCE_ID: ${{ secrets.ZAPI_INSTANCE_ID }}
+          ZAPI_TOKEN: ${{ secrets.ZAPI_TOKEN }}
+          ZAPI_CLIENT_TOKEN: ${{ secrets.ZAPI_CLIENT_TOKEN }}
+          SEU_WHATSAPP: ${{ secrets.SEU_WHATSAPP }}
+        run: node scripts/radar-semanal.js
