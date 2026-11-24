@@ -1,35 +1,29 @@
-import fs from "node:fs";
+import fs from "fs";
+import path from "path";
 import { GoogleGenAI } from "@google/genai";
 import { gerarHtmlArtigo } from "./template-artigo.js";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SHEETS_WEBAPP_URL = process.env.SHEETS_WEBAPP_URL;
 const SHEETS_SECRET = process.env.SHEETS_SECRET;
-
-// Facebook Graph API (Opcional)
-const FB_PAGE_ID = process.env.FB_PAGE_ID;
-const FB_PAGE_ACCESS_TOKEN = process.env.FB_PAGE_ACCESS_TOKEN;
-
-// Telegram (Custo Zero)
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const TELEGRAM_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID || "@compradodiaoficial";
-
-// Links das Comunidades VIP (Iscas no Site)
-const LINK_GRUPO_WHATSAPP = process.env.LINK_GRUPO_WHATSAPP || "https://compradodia.com.br/ofertas/";
 const LINK_CANAL_TELEGRAM = process.env.LINK_CANAL_TELEGRAM || "https://t.me/compradodiaoficial";
 
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
-function garantirPastas() {
-  ["artigos", "data", "ofertas"].forEach(dir => {
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  });
-}
+const SITE_URL = "https://compradodia.com.br";
+const PASTA_ARTIGOS = path.resolve("artigos");
 
-function lerJsonSeguro(caminho, padrao) {
-  if (!fs.existsSync(caminho)) return padrao;
-  return JSON.parse(fs.readFileSync(caminho, "utf-8"));
+function extrairObjetoJSON(texto) {
+  const limpo = (texto || "").replace(/```json|```/gi, "").trim();
+  const inicio = limpo.indexOf("{");
+  const fim = limpo.lastIndexOf("}");
+  if (inicio === -1 || fim === -1) {
+    throw new Error("Resposta do Gemini não contém um JSON válido.");
+  }
+  return JSON.parse(limpo.slice(inicio, fim + 1));
 }
 
 async function enviarTelegram(chatId, texto) {
@@ -44,296 +38,227 @@ async function enviarTelegram(chatId, texto) {
       disable_web_page_preview: false
     })
   });
-  return res.json();
+  const data = await res.json();
+  if (!data.ok) {
+    console.warn(`⚠️ Aviso Telegram (${chatId}):`, data.description);
+  }
 }
 
 async function buscarFilaAprovada() {
-  const res = await fetch(`${SHEETS_WEBAPP_URL}?token=${encodeURIComponent(SHEETS_SECRET)}`);
-  const rows = await res.json();
-  return rows.filter(r =>
-    r.status !== "PUBLICADO" &&
-    typeof r.link_afiliado_ml === "string" &&
-    r.link_afiliado_ml.trim().startsWith("http")
-  );
+  const separador = SHEETS_WEBAPP_URL.includes("?") ? "&" : "?";
+  const url = `${SHEETS_WEBAPP_URL}${separador}token=${encodeURIComponent(SHEETS_SECRET)}`;
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Falha ao consultar planilha: HTTP ${res.status}`);
+  }
+
+  const dados = await res.json();
+  const rows = Array.isArray(dados) ? dados : (dados.items || dados.itens || []);
+
+  return rows.filter((item) => {
+    const status = String(item.status || "").trim().toUpperCase();
+    const linkAfiliado = String(item.link_afiliado_ml || "").trim();
+    return status === "PENDENTE" && linkAfiliado.startsWith("http");
+  });
 }
 
-async function gerarConteudoComGemini(item, artigosExistentes) {
-  const relacionadosSugestao = artigosExistentes
-    .filter(a => a.categoria === item.categoria)
-    .slice(-3)
-    .map(a => ({ slug: a.slug, titulo: a.titulo }));
-
+async function gerarConteudoComGemini(item) {
   const prompt = `
-Você é o editor-chefe do portal "Compra do Dia" (compradodia.com.br), especializado em ajudar o público 55+ e 60+ (e filhos comprando para os pais) a fazer compras seguras e úteis no Mercado Livre.
+Você é um redator especialista em análises de produtos e guias de compra claros, confiáveis e objetivos para o público 55+ e 60+ no Brasil, escrevendo para o portal Compra do Dia.
 
-Produto selecionado:
-- Nome: ${item.produto}
+Crie um artigo completo e persuasivo sobre o produto abaixo:
+- Produto: ${item.produto}
 - Categoria: ${item.categoria}
-- Preço médio de referência: R$ ${item.preco_medio}
-- Tipo de pauta: ${item.tipo_post}
+- Preço médio: R$ ${item.preco_medio}
+- Formato: ${item.tipo_post || "REVIEW_INDIVIDUAL"}
 
-Crie um guia editorial completo, respeitoso, didático e sem jargões técnicos complicados.
-Deixe claro no texto que o Compra do Dia é um guia independente e que a compra final é feita com segurança dentro do Mercado Livre.
+Diretrizes:
+1. Linguagem acolhedora, direta, sem jargões técnicos complicados, destacando facilidade de uso, segurança, conforto e durabilidade.
+2. Estruture "conteudoHtml" usando apenas tags HTML semânticas (<p>, <h2>, <h3>, <ul>, <li>, <strong>) com:
+   - Introdução explicando para quem o produto é ideal;
+   - Principais benefícios e pontos positivos no dia a dia;
+   - O que observar antes de comprar;
+   - Veredito final.
+3. Inclua 3 perguntas frequentes práticas em "faq".
+4. Crie uma chamada curta e atrativa ("chamadaTelegram") para postar no canal do Telegram (sem colocar o link, pois o script adicionará os botões/links).
 
-Retorne APENAS um JSON válido com esta estrutura exata:
+Retorne APENAS um objeto JSON válido:
 {
-  "titulo": "Título editorial atraente para Google Discover e Facebook (máx 68 caracteres)",
-  "metaDescription": "Resumo claro para Google com 140 a 155 caracteres",
-  "vereditoRapido": "Parágrafo curto e direto (3 linhas) resumindo para quem o produto vale a pena e seu principal benefício (otimizado para IA/GEO)",
-  "introducaoHtml": "<p>2 a 3 parágrafos conectando o problema do dia a dia à solução prática.</p>",
-  "produtos": [
-    {
-      "slugLink": "${item.slug}",
-      "nome": "${item.produto}",
-      "selo": "Destaque Custo-Benefício",
-      "resumo": "Explicação prática de como funciona no dia a dia",
-      "idealPara": "Perfil exato de quem mais aproveita",
-      "pros": ["Vantagem 1", "Vantagem 2", "Vantagem 3"],
-      "contras": ["Ponto de atenção honesto 1"]
-    }
+  "titulo": "Título atraente para SEO (até 65 caracteres)",
+  "metaDescricao": "Resumo claro para o Google (até 155 caracteres)",
+  "conteudoHtml": "<p>...</p><h2>...</h2>...",
+  "faq": [
+    { "pergunta": "...", "resposta": "..." }
   ],
-  "tabelaComparativaHtml": "<table><thead><tr><th>Característica</th><th>Detalhes</th><th>Benefício Prático</th></tr></thead><tbody><tr><td>Uso</td><td>Simples e intuitivo</td><td>Não exige conhecimento técnico</td></tr><tr><td>Entrega</td><td>Mercado Livre Full</td><td>Recebimento rápido e devolução grátis</td></tr></tbody></table>",
-  "guiaCompraHtml": "<h2>O que observar antes de escolher</h2><p>Dicas práticas de segurança, voltagem, garantia e uso.</p>",
-  "faqs": [
-    { "pergunta": "Pergunta comum de quem tem 55+ sobre esse produto?", "resposta": "Resposta clara e tranquilizadora." },
-    { "pergunta": "A compra é feita com segurança no Mercado Livre?", "resposta": "Sim. Ao clicar nos botões desta página, você é levado diretamente ao anúncio oficial no Mercado Livre, com Compra Garantida e devolução grátis." },
-    { "pergunta": "É difícil de instalar ou usar no dia a dia?", "resposta": "Explicação simples sobre a facilidade de uso." }
-  ],
-  "postFacebook": "Texto envolvente de 3 a 4 linhas para postar na Página do Facebook despertando curiosidade e utilidade.",
-  "cardMensageiro": "Texto curto (sem tags HTML) destacando o problema resolvido, preço aproximado (R$ ${item.preco_medio}) e por que vale a pena."
+  "chamadaTelegram": "Texto curto com 2 ou 3 tópicos destacando o benefício e o preço médio"
 }
 `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: "gemini-3.6-flash",
     contents: prompt,
     config: { responseMimeType: "application/json" }
   });
 
-  const gerado = JSON.parse(response.text);
-  gerado.artigosRelacionados = relacionadosSugestao;
-  return gerado;
+  return extrairObjetoJSON(response.text);
 }
 
-function atualizarIndexESitemap(publicados, linksMap) {
-  const cardsHome = publicados
-    .slice()
-    .reverse()
-    .map(art => `
-      <article class="product-card" style="margin: 20px 0;">
-        <span class="category-badge">${art.categoria}</span>
-        <h2 style="margin-top: 6px; font-size: 23px;">
-          <a href="/artigos/${art.slug}.html" style="color: #0f172a; text-decoration: none;">${art.titulo}</a>
-        </h2>
-        <p style="color: #475569; font-size: 17px;">${art.metaDescription}</p>
-        <a href="/artigos/${art.slug}.html" class="btn-ml" style="font-size: 17px; padding: 12px 20px; max-width: 280px;">Ler Análise Completa ➔</a>
-      </article>
-    `).join("\n");
-
-  const homeHtml = `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Compra do Dia | Guias Práticos e Achados Seguros no Mercado Livre</title>
-  <meta name="description" content="Análises independentes, comparativos e dicas práticas de casa, bem-estar e utilidades para comprar com segurança no Mercado Livre.">
-  <link rel="canonical" href="https://compradodia.com.br/">
-  <link rel="stylesheet" href="/assets/style.css">
-</head>
-<body>
-  <div class="disclosure-bar">
-    <strong>Guia Independente:</strong> Pesquisamos os produtos mais bem avaliados. As compras são concluídas diretamente no site oficial do <strong>Mercado Livre</strong>.
-  </div>
-  <div class="vip-top-bar">
-    📲 Receba 1 achado útil por dia (sem spam):
-    <a href="${LINK_GRUPO_WHATSAPP}" target="_blank" rel="noopener">Grupo WhatsApp</a> •
-    <a href="${LINK_CANAL_TELEGRAM}" target="_blank" rel="noopener">Canal Telegram</a>
-  </div>
-  <header class="site-header">
-    <div class="container">
-      <a href="/" class="logo">Compra<span>doDia</span></a>
-      <nav class="nav-links">
-        <a href="/">Início</a>
-        <a href="/ofertas/">Destaques da Semana</a>
-      </nav>
-    </div>
-  </header>
-  <main class="container">
-    <section style="margin: 28px 0 10px;">
-      <h1 style="font-size: 28px;">Guias Práticos e Escolhas Seguras</h1>
-      <p style="color: #475569;">Selecionamos soluções úteis para facilitar o dia a dia em casa, com envio rápido e garantia oficial do Mercado Livre.</p>
-    </section>
-    ${cardsHome}
-  </main>
-  <footer class="site-footer">
-    <div class="container">
-      <p><strong>Compra do Dia</strong> (compradodia.com.br) — Curadoria independente de compras.</p>
-      <p>Participamos do Programa de Afiliados do Mercado Livre. Todas as compras e entregas são realizadas dentro da plataforma oficial do Mercado Livre.</p>
-    </div>
-  </footer>
-</body>
-</html>`;
-  fs.writeFileSync("index.html", homeHtml, "utf-8");
-
-  const itensVitrine = Object.entries(linksMap)
-    .reverse()
-    .slice(0, 20)
-    .map(([slug, info]) => `
-      <div class="product-card" style="padding: 18px; margin: 14px 0;">
-        <span class="category-badge">${info.categoria}</span>
-        <h3 style="margin: 6px 0 12px; font-size: 19px;">${info.titulo}</h3>
-        <a href="/ir/?p=${slug}" class="btn-ml" target="_blank" rel="nofollow sponsored noopener" style="font-size: 17px; padding: 14px;">
-          Ver no Mercado Livre ➔
-        </a>
-      </div>
-    `).join("\n");
-
-  const vitrineHtml = `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Destaques da Semana | Compra do Dia</title>
-  <meta name="robots" content="noindex, follow">
-  <link rel="stylesheet" href="/assets/style.css">
-</head>
-<body>
-  <header class="site-header">
-    <div class="container">
-      <a href="/" class="logo">Compra<span>doDia</span></a>
-      <nav class="nav-links"><a href="/">Ver Artigos</a></nav>
-    </div>
-  </header>
-  <main class="container">
-    <aside class="vip-capture-box" style="margin-top: 22px;">
-      <h3>📲 Entre na nossa Lista Silenciosa de Achados</h3>
-      <p style="margin-bottom: 10px;">Receba 1 a 2 ofertas verificadas por dia no celular (sem spam):</p>
-      <div class="vip-buttons-row">
-        <a href="${LINK_GRUPO_WHATSAPP}" class="btn-whats-vip" target="_blank" rel="noopener">🟢 Grupo WhatsApp</a>
-        <a href="${LINK_CANAL_TELEGRAM}" class="btn-tele-vip" target="_blank" rel="noopener">🔵 Canal Telegram</a>
-      </div>
-    </aside>
-
-    <h1 style="font-size: 26px; margin-top: 24px;">🔥 Destaques Selecionados</h1>
-    <p style="color: #475569;">Toque no item desejado para abrir o anúncio oficial direto no Mercado Livre:</p>
-    ${itensVitrine}
-  </main>
-</body>
-</html>`;
-  fs.writeFileSync("ofertas/index.html", vitrineHtml, "utf-8");
-
-  const urlsXml = [
-    `  <url><loc>https://compradodia.com.br/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`,
-    ...publicados.map(a => `  <url><loc>https://compradodia.com.br/artigos/${a.slug}.html</loc><lastmod>${a.dataIso}</lastmod><priority>0.8</priority></url>`)
-  ].join("\n");
-
-  const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urlsXml}\n</urlset>`;
-  fs.writeFileSync("sitemap.xml", sitemap, "utf-8");
-}
-
-async function postarNoFacebook(mensagem, urlArtigo) {
-  if (!FB_PAGE_ID || !FB_PAGE_ACCESS_TOKEN) return;
-  const endpoint = `https://graph.facebook.com/v21.0/${FB_PAGE_ID}/feed`;
-  await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      message: mensagem,
-      link: urlArtigo,
-      access_token: FB_PAGE_ACCESS_TOKEN
-    })
-  });
-}
-
-async function executarPublicacao() {
-  garantirPastas();
-  const fila = await buscarFilaAprovada();
-
-  if (fila.length === 0) {
-    console.log("⏸️ Nenhum produto com link preenchido na planilha.");
-    return;
-  }
-
-  const item = fila[0];
-  console.log(`✍️ Gerando artigo para: ${item.produto}...`);
-
-  const linksMap = lerJsonSeguro("data/links.json", {});
-  const publicados = lerJsonSeguro("data/publicados.json", []);
-
-  const conteudo = await gerarConteudoComGemini(item, publicados);
-  const agora = new Date();
-  const dataIso = agora.toISOString().split("T")[0];
-  const dataFormatada = agora.toLocaleDateString("pt-BR");
-
-  linksMap[item.slug] = {
-    titulo: item.produto,
-    url: item.link_afiliado_ml.trim(),
-    categoria: item.categoria,
-    atualizado_em: dataIso
-  };
-  fs.writeFileSync("data/links.json", JSON.stringify(linksMap, null, 2), "utf-8");
-
-  const htmlFinal = gerarHtmlArtigo(
-    {
-      slug: item.slug,
-      titulo: conteudo.titulo,
-      metaDescription: conteudo.metaDescription,
-      categoria: item.categoria,
-      dataIso,
-      dataFormatada,
-      vereditoRapido: conteudo.vereditoRapido,
-      introducaoHtml: conteudo.introducaoHtml,
-      produtos: conteudo.produtos,
-      tabelaComparativaHtml: conteudo.tabelaComparativaHtml,
-      guiaCompraHtml: conteudo.guiaCompraHtml,
-      faqs: conteudo.faqs,
-      artigosRelacionados: conteudo.artigosRelacionados
-    },
-    { whatsapp: LINK_GRUPO_WHATSAPP, telegram: LINK_CANAL_TELEGRAM }
-  );
-
-  fs.writeFileSync(`artigos/${item.slug}.html`, htmlFinal, "utf-8");
-
-  publicados.push({
-    slug: item.slug,
-    titulo: conteudo.titulo,
-    metaDescription: conteudo.metaDescription,
-    categoria: item.categoria,
-    dataIso
-  });
-  fs.writeFileSync("data/publicados.json", JSON.stringify(publicados, null, 2), "utf-8");
-
-  atualizarIndexESitemap(publicados, linksMap);
-
-  const urlArtigo = `https://compradodia.com.br/artigos/${item.slug}.html`;
-  const urlDiretaMl = `https://compradodia.com.br/ir/?p=${item.slug}`;
-
-  // 1. Publica na Página do Facebook (se configurado)
-  await postarNoFacebook(`${conteudo.postFacebook}\n\n👇 Leia a análise completa e veja no Mercado Livre:`, urlArtigo);
-
-  // 2. Publica automaticamente no Canal Público do Telegram (@compradodiaoficial)
-  const msgCanalTelegram = `🔥 <b>${conteudo.titulo}</b>\n\n${conteudo.cardMensageiro}\n\n📖 <b>Leia a análise completa:</b>\n${urlArtigo}\n\n🛒 <b>Ver direto no Mercado Livre:</b>\n${urlDiretaMl}`;
-  await enviarTelegram(TELEGRAM_CHANNEL_ID, msgCanalTelegram);
-
-  // 3. Envia no seu Telegram Pessoal pronto para você encaminhar ao Grupo VIP do WhatsApp
-  const msgParaEncaminharWhats = `✅ <b>Artigo Publicado!</b> Copie ou encaminhe o texto abaixo para o seu Grupo VIP do WhatsApp:\n\n🔥 *${conteudo.titulo}*\n\n${conteudo.cardMensageiro}\n\n📖 *Leia a análise:* ${urlArtigo}\n🛒 *Ver no Mercado Livre:* ${urlDiretaMl}`;
-  await enviarTelegram(TELEGRAM_CHAT_ID, msgParaEncaminharWhats);
-
-  // 4. Marca como PUBLICADO na planilha
-  await fetch(SHEETS_WEBAPP_URL, {
+async function marcarComoPublicado(slug) {
+  const res = await fetch(SHEETS_WEBAPP_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       token: SHEETS_SECRET,
       action: "mark_published",
-      rowIndex: item._rowIndex
+      slug: slug,
+      status: "PUBLICADO"
     })
   });
-
-  console.log(`🎉 Publicação concluída: ${urlArtigo}`);
+  const json = await res.json();
+  console.log(`✅ Status atualizado na planilha para "${slug}":`, JSON.stringify(json));
 }
 
-executarPublicacao().catch(err => {
+function atualizarIndexESitemap() {
+  if (!fs.existsSync(PASTA_ARTIGOS)) {
+    fs.mkdirSync(PASTA_ARTIGOS, { recursive: true });
+  }
+
+  const arquivos = fs
+    .readdirSync(PASTA_ARTIGOS)
+    .filter((f) => f.endsWith(".html"))
+    .sort()
+    .reverse();
+
+  const cardsHtml = arquivos
+    .map((arquivo) => {
+      const slug = arquivo.replace(".html", "");
+      const html = fs.readFileSync(path.join(PASTA_ARTIGOS, arquivo), "utf-8");
+      const matchTitulo = html.match(/<h1>(.*?)<\/h1>/i);
+      const matchDesc = html.match(/<meta name="description" content="(.*?)">/i);
+      const matchCat = html.match(/<span class="badge">(.*?)<\/span>/i);
+
+      const titulo = matchTitulo ? matchTitulo[1] : slug;
+      const desc = matchDesc ? matchDesc[1] : "";
+      const cat = matchCat ? matchCat[1] : "Oferta";
+
+      return `
+        <article style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(15,23,42,0.04);">
+          <span style="display:inline-block;background:#e0f2fe;color:#0369a1;font-size:0.8rem;font-weight:700;padding:3px 10px;border-radius:999px;margin-bottom:8px;">${cat}</span>
+          <h2 style="margin:0 0 8px 0;font-size:1.3rem;"><a href="/artigos/${arquivo}" style="color:#0f172a;text-decoration:none;">${titulo}</a></h2>
+          <p style="margin:0 0 12px 0;color:#475569;font-size:1rem;">${desc}</p>
+          <a href="/artigos/${arquivo}" style="display:inline-block;background:#0f172a;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:700;font-size:0.95rem;">Ler Análise Completa →</a>
+        </article>`;
+    })
+    .join("\n");
+
+  const indexHtml = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Compra do Dia | Achados e Análises Verificadas do Mercado Livre</title>
+  <meta name="description" content="Curadoria diária de ofertas, análises honestas e produtos úteis selecionados no Mercado Livre.">
+</head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f1f5f9;color:#1e293b;margin:0;padding:0;line-height:1.6;">
+  <header style="background:#0f172a;color:#fff;padding:24px 20px;text-align:center;">
+    <h1 style="margin:0;font-size:1.8rem;">🛒 Compra do Dia</h1>
+    <p style="margin:6px 0 0 0;color:#cbd5e1;">Achados verificados, reviews práticos e ofertas reais do Mercado Livre</p>
+  </header>
+  <main style="max-width:780px;margin:28px auto;padding:0 16px;">
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:16px;margin-bottom:24px;text-align:center;">
+      <strong>🔔 Receba as ofertas primeiro no Telegram:</strong>
+      <a href="${LINK_CANAL_TELEGRAM}" target="_blank" rel="noopener" style="display:inline-block;margin-left:8px;background:#0284c7;color:#fff;padding:8px 16px;border-radius:8px;text-decoration:none;font-weight:700;">Entrar no Canal</a>
+    </div>
+    ${cardsHtml || "<p>Novas análises sendo publicadas em breve.</p>"}
+  </main>
+  <footer style="text-align:center;padding:24px;font-size:0.85rem;color:#64748b;">
+    Compra do Dia • Programa de Afiliados Mercado Livre
+  </footer>
+</body>
+</html>`;
+
+  fs.writeFileSync(path.resolve("index.html"), indexHtml, "utf-8");
+
+  const hoje = new Date().toISOString().split("T")[0];
+  const urlsSitemap = [
+    `  <url><loc>${SITE_URL}/</loc><lastmod>${hoje}</lastmod><priority>1.0</priority></url>`,
+    ...arquivos.map(
+      (arq) => `  <url><loc>${SITE_URL}/artigos/${arq}</loc><lastmod>${hoje}</lastmod><priority>0.8</priority></url>`
+    )
+  ].join("\n");
+
+  const sitemapXml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urlsSitemap}
+</urlset>`;
+
+  fs.writeFileSync(path.resolve("sitemap.xml"), sitemapXml, "utf-8");
+  console.log(`🗺️ index.html e sitemap.xml atualizados (${arquivos.length} artigos).`);
+}
+
+async function executarPublicacao() {
+  console.log("🚀 Iniciando publicação de conteúdo e distribuição...");
+
+  const filaAprovada = await buscarFilaAprovada();
+  console.log(`📋 Itens aprovados com link de afiliado prontos para publicar: ${filaAprovada.length}`);
+
+  if (filaAprovada.length === 0) {
+    console.log("ℹ️ Nenhum item PENDENTE com link na coluna G encontrado. Encerrando.");
+    return;
+  }
+
+  if (!fs.existsSync(PASTA_ARTIGOS)) {
+    fs.mkdirSync(PASTA_ARTIGOS, { recursive: true });
+  }
+
+  const hoje = new Date().toISOString().split("T")[0];
+  let publicadosNestaExecucao = 0;
+
+  for (const item of filaAprovada) {
+    console.log(`✍️ Gerando artigo para: ${item.produto}...`);
+    const conteudo = await gerarConteudoComGemini(item);
+
+    const htmlFinal = gerarHtmlArtigo({
+      titulo: conteudo.titulo,
+      metaDescricao: conteudo.metaDescricao,
+      categoria: item.categoria,
+      produto: item.produto,
+      precoMedio: item.preco_medio,
+      linkAfiliado: item.link_afiliado_ml,
+      conteudoHtml: conteudo.conteudoHtml,
+      faq: conteudo.faq || [],
+      dataPublicacao: hoje,
+      linkCanalTelegram: LINK_CANAL_TELEGRAM
+    });
+
+    const nomeArquivo = `${item.slug}.html`;
+    fs.writeFileSync(path.join(PASTA_ARTIGOS, nomeArquivo), htmlFinal, "utf-8");
+
+    const urlArtigo = `${SITE_URL}/artigos/${nomeArquivo}`;
+    const precoFormatado = Number(item.preco_medio || 0).toLocaleString("pt-BR", {
+      style: "currency",
+      currency: "BRL"
+    });
+
+    const mensagemCanal = `🔥 <b>${item.produto}</b>\n\n${conteudo.chamadaTelegram}\n\n💰 <b>Faixa de preço:</b> ${precoFormatado}\n\n🛒 <a href="${item.link_afiliado_ml}">COMPRAR DIRETO NO MERCADO LIVRE</a>\n📖 <a href="${urlArtigo}">Ler análise completa no site</a>`;
+
+    await enviarTelegram(TELEGRAM_CHANNEL_ID, mensagemCanal);
+    await marcarComoPublicado(item.slug);
+    publicadosNestaExecucao++;
+  }
+
+  atualizarIndexESitemap();
+
+  if (publicadosNestaExecucao > 0 && TELEGRAM_CHAT_ID) {
+    await enviarTelegram(
+      TELEGRAM_CHAT_ID,
+      `✅ <b>Publicação concluída!</b>\n\nForam publicados <b>${publicadosNestaExecucao} artigo(s)</b> em <code>compradodia.com.br</code> e disparados no canal <code>${TELEGRAM_CHANNEL_ID}</code>.`
+    );
+  }
+}
+
+executarPublicacao().catch((err) => {
   console.error("Erro na publicação:", err);
   process.exit(1);
 });
