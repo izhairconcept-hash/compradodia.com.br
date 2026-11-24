@@ -15,6 +15,7 @@ const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 const SITE_URL = "https://compradodia.com.br";
 const PASTA_ARTIGOS = path.resolve("artigos");
+const LIMITE_POSTS_POR_EXECUCAO = 1;
 
 function extrairObjetoJSON(texto) {
   const limpo = (texto || "").replace(/```json|```/gi, "").trim();
@@ -201,9 +202,11 @@ async function executarPublicacao() {
   console.log("🚀 Iniciando publicação de conteúdo e distribuição...");
 
   const filaAprovada = await buscarFilaAprovada();
-  console.log(`📋 Itens aprovados com link de afiliado prontos para publicar: ${filaAprovada.length}`);
+  console.log(`📋 Total na fila aprovada: ${filaAprovada.length} | Limite por disparo: ${LIMITE_POSTS_POR_EXECUCAO}`);
 
-  if (filaAprovada.length === 0) {
+  const filaParaPublicar = filaAprovada.slice(0, LIMITE_POSTS_POR_EXECUCAO);
+
+  if (filaParaPublicar.length === 0) {
     console.log("ℹ️ Nenhum item PENDENTE com link na coluna G encontrado. Encerrando.");
     return;
   }
@@ -215,7 +218,7 @@ async function executarPublicacao() {
   const hoje = new Date().toISOString().split("T")[0];
   let publicadosNestaExecucao = 0;
 
-  for (const item of filaAprovada) {
+  for (const item of filaParaPublicar) {
     console.log(`✍️ Gerando artigo para: ${item.produto}...`);
     const conteudo = await gerarConteudoComGemini(item);
 
@@ -250,10 +253,11 @@ async function executarPublicacao() {
 
   atualizarIndexESitemap();
 
+  const restantes = filaAprovada.length - publicadosNestaExecucao;
   if (publicadosNestaExecucao > 0 && TELEGRAM_CHAT_ID) {
     await enviarTelegram(
       TELEGRAM_CHAT_ID,
-      `✅ <b>Publicação concluída!</b>\n\nForam publicados <b>${publicadosNestaExecucao} artigo(s)</b> em <code>compradodia.com.br</code> e disparados no canal <code>${TELEGRAM_CHANNEL_ID}</code>.`
+      `✅ <b>Publicação diária concluída!</b>\n\nPublicado: <b>${filaParaPublicar[0].produto}</b>\nRestam na fila aprovada: <b>${restantes} item(ns)</b>.`
     );
   }
 }
